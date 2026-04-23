@@ -55,10 +55,10 @@ class MainActivity : AppCompatActivity() {
 
     // Buttons
     private var mCurrentAirHeight = 6
-    private var mLastButtons = HashSet<Int>()
+    private var mLastButtons: Long = 0L
     private var mTestButton = false
     private var mServiceButton = false
-    private data class InputEvent(val keys: MutableSet<Int>? = null, val airHeight : Int = 6, val testButton: Boolean = false, val serviceButton: Boolean = false)
+    private data class InputEvent(val keys: Long = 0L, val airHeight : Int = 6, val testButton: Boolean = false, val serviceButton: Boolean = false)
     //private var mInputQueue = ArrayDeque<InputEvent>()
 
     // LEDs
@@ -67,6 +67,13 @@ class MainActivity : AppCompatActivity() {
     private var buttonWidth = 0f
     private var gapWidth = 0f
     private lateinit var mButtonRenderer: View
+    private val mLEDPaint = Paint()
+
+    // Object pools to eliminate per-frame allocation
+    private val mIoBuffer = IoBuffer()
+    private val mSendBuffer = ByteArray(48)
+    private val mCardBuffer = ByteArray(24)
+    private val mPingBuffer = ByteArray(12)
 
     // vibrator
     private var mEnableVibrate = true
@@ -462,6 +469,9 @@ class MainActivity : AppCompatActivity() {
         mButtonRenderer.background = BitmapDrawable(resources, mLEDBitmap)
 
         findViewById<View>(R.id.touch_area).setOnTouchListener { view, event ->
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                view.requestUnbufferedDispatch(event)
+            }
             if (expandControl.isExpanded)
                 textExpand.callOnClick()
             view ?: return@setOnTouchListener view.performClick()
@@ -474,7 +484,7 @@ class MainActivity : AppCompatActivity() {
             val currentAirAreaHeight = if (mAirSource != 3) 0f else airAreaHeight
             val currentButtonAreaHeight = if (mAirSource != 3) 0f else buttonAreaHeight
             val totalTouches = event.pointerCount
-            val touchedButtons = HashSet<Int>()
+            var touchedButtons: Long = 0L
             var thisAirHeight = 6
             var maxTouchedSize = 0f
             if (event.action != KeyEvent.ACTION_UP && event.action != MotionEvent.ACTION_CANCEL) {
@@ -501,62 +511,62 @@ class MainActivity : AppCompatActivity() {
 
                             if (mEnableTouchSize) {
                                 var centerButton = index * 2
-                                if (touchedButtons.contains(centerButton)) centerButton++
+                                if ((touchedButtons and (1L shl centerButton)) != 0L) centerButton++
                                 var leftButton = ((index - 1) * 2).coerceAtLeast(0)
-                                if (touchedButtons.contains(leftButton)) leftButton++
+                                if ((touchedButtons and (1L shl leftButton)) != 0L) leftButton++
                                 var rightButton = ((index + 1) * 2).coerceAtMost(numOfButtons * 2)
-                                if (touchedButtons.contains(rightButton)) rightButton++
+                                if ((touchedButtons and (1L shl rightButton)) != 0L) rightButton++
                                 var left2Button = ((index - 2) * 2).coerceAtLeast(0)
-                                if (touchedButtons.contains(left2Button)) left2Button++
+                                if ((touchedButtons and (1L shl left2Button)) != 0L) left2Button++
                                 var right2Button = ((index + 2) * 2).coerceAtMost(numOfButtons * 2)
-                                if (touchedButtons.contains(right2Button)) right2Button++
+                                if ((touchedButtons and (1L shl right2Button)) != 0L) right2Button++
 
                                 val currentSize = event.getSize(i)
                                 maxTouchedSize = maxTouchedSize.coerceAtLeast(currentSize)
 
-                                touchedButtons.add(centerButton)
+                                touchedButtons = touchedButtons or (1L shl centerButton)
                                 when ((pointPos - index) * 4) {
                                     in 0f..1f -> {
-                                        touchedButtons.add(leftButton)
+                                        touchedButtons = touchedButtons or (1L shl leftButton)
                                         if (currentSize >= mExtraFatTouchSizeThreshold) {
-                                            touchedButtons.add(left2Button)
-                                            touchedButtons.add(rightButton)
+                                            touchedButtons = touchedButtons or (1L shl left2Button)
+                                            touchedButtons = touchedButtons or (1L shl rightButton)
                                         }
                                     }
                                     in 1f..3f -> {
                                         if (currentSize >= mFatTouchSizeThreshold) {
-                                            touchedButtons.add(leftButton)
-                                            touchedButtons.add(rightButton)
+                                            touchedButtons = touchedButtons or (1L shl leftButton)
+                                            touchedButtons = touchedButtons or (1L shl rightButton)
                                         }
                                         if (currentSize >= mExtraFatTouchSizeThreshold) {
-                                            touchedButtons.add(left2Button)
-                                            touchedButtons.add(right2Button)
+                                            touchedButtons = touchedButtons or (1L shl left2Button)
+                                            touchedButtons = touchedButtons or (1L shl right2Button)
                                         }
                                     }
                                     in 3f..4f -> {
-                                        touchedButtons.add(rightButton)
+                                        touchedButtons = touchedButtons or (1L shl rightButton)
                                         if (currentSize >= mExtraFatTouchSizeThreshold) {
-                                            touchedButtons.add(leftButton)
-                                            touchedButtons.add(right2Button)
+                                            touchedButtons = touchedButtons or (1L shl leftButton)
+                                            touchedButtons = touchedButtons or (1L shl right2Button)
                                         }
                                     }
                                 }
                             } else {
                                 if (index > 15) index = 15
                                 var targetIndex = index * 2
-                                if (touchedButtons.contains(targetIndex)) targetIndex++
-                                touchedButtons.add(targetIndex)
+                                if ((touchedButtons and (1L shl targetIndex)) != 0L) targetIndex++
+                                touchedButtons = touchedButtons or (1L shl targetIndex)
                                 if (index > 0) {
                                     if ((pointPos - index) * 4 < 1) {
                                         targetIndex = (index - 1) * 2
-                                        if (touchedButtons.contains(targetIndex)) targetIndex++
-                                        touchedButtons.add(targetIndex)
+                                        if ((touchedButtons and (1L shl targetIndex)) != 0L) targetIndex++
+                                        touchedButtons = touchedButtons or (1L shl targetIndex)
                                     }
                                 } else if (index < 31) {
                                     if ((pointPos - index) * 4 > 3) {
                                         targetIndex = (index + 1) * 2
-                                        if (touchedButtons.contains(targetIndex)) targetIndex++
-                                        touchedButtons.add(targetIndex)
+                                        if ((touchedButtons and (1L shl targetIndex)) != 0L) targetIndex++
+                                        touchedButtons = touchedButtons or (1L shl targetIndex)
                                     }
                                 }
                             }
@@ -569,7 +579,7 @@ class MainActivity : AppCompatActivity() {
             if (mEnableVibrate) {
                 if (hasNewKeys(mLastButtons, touchedButtons))
                     mVibrationQueue.add(vibrateLength)
-                else if (touchedButtons.isEmpty())
+                else if (touchedButtons == 0L)
                     mVibrationQueue.clear()
             }
             mLastButtons = touchedButtons
@@ -663,10 +673,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun hasNewKeys(oldKeys: MutableSet<Int>, newKeys: MutableSet<Int>): Boolean {
-        for (i in newKeys)
-            if (!oldKeys.contains(i)) return true
-        return false
+    private fun hasNewKeys(oldKeys: Long, newKeys: Long): Boolean {
+        return (newKeys and oldKeys.inv()) != 0L
     }
 
     private fun parseAddress(address: String): InetSocketAddress? {
@@ -752,6 +760,7 @@ class MainActivity : AppCompatActivity() {
         senderTask = AsyncTaskUtil.AsyncTask.make(
             doInBackground = {
                 val address = it[0] ?: return@make
+                val intervalNs = 1_000_000L // 1ms in nanos
                 if (mTCPMode) {
                     try {
                         mTCPSocket = Socket().apply {
@@ -762,21 +771,32 @@ class MainActivity : AppCompatActivity() {
                         e.printStackTrace()
                         return@make
                     }
+                    var nextTime = System.nanoTime()
                     while (!mExitFlag) {
                         if (mShowDelay)
                             sendTCPPing()
                         val buttons = InputEvent(mLastButtons, mCurrentAirHeight, mTestButton, mServiceButton)
-                        val buffer = applyKeys(buttons, IoBuffer())
+                        val buffer = applyKeys(buttons, mIoBuffer)
                         try {
-                            mTCPSocket.getOutputStream().write(constructBuffer(buffer))
-                            if (mEnableNFC)
-                                mTCPSocket.getOutputStream().write(constructCardData())
+                            val dataBuf = constructBuffer(buffer)
+                            mTCPSocket.getOutputStream().write(dataBuf, 0, buffer.length + 1)
+                            if (mEnableNFC) {
+                                val cardBuf = constructCardData()
+                                mTCPSocket.getOutputStream().write(cardBuf, 0, cardBuf[0].toInt() + 1)
+                            }
                         } catch (e: Exception) {
                             e.printStackTrace()
                             continue
                         }
-                        //Thread.yield()
-                        Thread.sleep(1)
+                        nextTime += intervalNs
+                        val now = System.nanoTime()
+                        if (nextTime > now) {
+                            val sleepMs = (nextTime - now) / 1_000_000L - 1L
+                            if (sleepMs > 0) Thread.sleep(sleepMs)
+                            while (System.nanoTime() < nextTime) {
+                                // busy-wait spin for sub-millisecond precision
+                            }
+                        }
                     }
                 } else {
                     val socket = try {
@@ -794,11 +814,12 @@ class MainActivity : AppCompatActivity() {
                         e.printStackTrace()
                         return@make
                     }
+                    var nextTime = System.nanoTime()
                     while (!mExitFlag) {
                         if (mShowDelay)
                             sendPing(address)
                         val buttons = InputEvent(mLastButtons, mCurrentAirHeight, mTestButton, mServiceButton)
-                        val buffer = applyKeys(buttons/* ?: InputEvent()*/, IoBuffer())
+                        val buffer = applyKeys(buttons, mIoBuffer)
                         val packet = constructPacket(buffer)
                         try {
                             socket.send(packet)
@@ -809,8 +830,15 @@ class MainActivity : AppCompatActivity() {
                             Thread.sleep(100)
                             continue
                         }
-                        //Thread.sleep(2)
-                        Thread.sleep(1)
+                        nextTime += intervalNs
+                        val now = System.nanoTime()
+                        if (nextTime > now) {
+                            val sleepMs = (nextTime - now) / 1_000_000L - 1L
+                            if (sleepMs > 0) Thread.sleep(sleepMs)
+                            while (System.nanoTime() < nextTime) {
+                                // busy-wait spin for sub-millisecond precision
+                            }
+                        }
                     }
                     socket.close()
                 }
@@ -966,12 +994,14 @@ class MainActivity : AppCompatActivity() {
         address ?: return
         if (System.currentTimeMillis() - lastPingTime < pingInterval) return
         lastPingTime = System.currentTimeMillis()
-        val buffer = ByteArray(12)
-        byteArrayOf(11, 'P'.byte(), 'I'.byte(), 'N'.byte()).copyInto(buffer)
-        ByteBuffer.wrap(buffer, 4, 8).putLong(SystemClock.elapsedRealtimeNanos())
+        mPingBuffer[0] = 11
+        mPingBuffer[1] = 'P'.byte()
+        mPingBuffer[2] = 'I'.byte()
+        mPingBuffer[3] = 'N'.byte()
+        ByteBuffer.wrap(mPingBuffer, 4, 8).putLong(SystemClock.elapsedRealtimeNanos())
         try {
             val socket = DatagramSocket()
-            val packet = DatagramPacket(buffer, buffer.size)
+            val packet = DatagramPacket(mPingBuffer, mPingBuffer.size)
             socket.apply {
                 connect(address)
                 send(packet)
@@ -985,11 +1015,13 @@ class MainActivity : AppCompatActivity() {
     private fun sendTCPPing() {
         if (System.currentTimeMillis() - lastPingTime < pingInterval) return
         lastPingTime = System.currentTimeMillis()
-        val buffer = ByteArray(12)
-        byteArrayOf(11, 'P'.byte(), 'I'.byte(), 'N'.byte()).copyInto(buffer)
-        ByteBuffer.wrap(buffer, 4, 8).putLong(SystemClock.elapsedRealtimeNanos())
+        mPingBuffer[0] = 11
+        mPingBuffer[1] = 'P'.byte()
+        mPingBuffer[2] = 'I'.byte()
+        mPingBuffer[3] = 'N'.byte()
+        ByteBuffer.wrap(mPingBuffer, 4, 8).putLong(SystemClock.elapsedRealtimeNanos())
         try {
-            mTCPSocket.getOutputStream().write(buffer)
+            mTCPSocket.getOutputStream().write(mPingBuffer)
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -1003,21 +1035,20 @@ class MainActivity : AppCompatActivity() {
 
     private var currentPacketId = 1
     private fun constructBuffer(buffer: IoBuffer): ByteArray {
-        val realBuf = ByteArray(48)
-        realBuf[0] = buffer.length.toByte()
-        buffer.header.copyInto(realBuf, 1)
-        ByteBuffer.wrap(realBuf).putInt(4, currentPacketId++)
+        mSendBuffer[0] = buffer.length.toByte()
+        buffer.header.copyInto(mSendBuffer, 1)
+        ByteBuffer.wrap(mSendBuffer).putInt(4, currentPacketId++)
         if (mEnableAir) {
-            buffer.air.copyInto(realBuf, 8)
-            buffer.slider.copyInto(realBuf, 14)
-            realBuf[46] = if (buffer.testBtn) 0x01 else 0x00
-            realBuf[47] = if (buffer.serviceBtn) 0x01 else 0x00
+            buffer.air.copyInto(mSendBuffer, 8)
+            buffer.slider.copyInto(mSendBuffer, 14)
+            mSendBuffer[46] = if (buffer.testBtn) 0x01 else 0x00
+            mSendBuffer[47] = if (buffer.serviceBtn) 0x01 else 0x00
         } else {
-            buffer.slider.copyInto(realBuf, 8)
-            realBuf[40] = if (buffer.testBtn) 0x01 else 0x00
-            realBuf[41] = if (buffer.serviceBtn) 0x01 else 0x00
+            buffer.slider.copyInto(mSendBuffer, 8)
+            mSendBuffer[40] = if (buffer.testBtn) 0x01 else 0x00
+            mSendBuffer[41] = if (buffer.serviceBtn) 0x01 else 0x00
         }
-        return realBuf
+        return mSendBuffer
     }
 
     private fun constructPacket(buffer: IoBuffer): DatagramPacket {
@@ -1026,18 +1057,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun constructCardData(): ByteArray {
-        val buf = ByteArray(24)
-        byteArrayOf(15, 'C'.byte(), 'R'.byte(), 'D'.byte()).copyInto(buf)
-        buf[4] = if (hasCard) 1 else 0
-        buf[5] = cardType.ordinal.toByte()
+        mCardBuffer.fill(0)
+        mCardBuffer[0] = 15
+        mCardBuffer[1] = 'C'.byte()
+        mCardBuffer[2] = 'R'.byte()
+        mCardBuffer[3] = 'D'.byte()
+        mCardBuffer[4] = if (hasCard) 1 else 0
+        mCardBuffer[5] = cardType.ordinal.toByte()
         if (hasCard)
-            cardId.copyInto(buf, 6)
-        return buf
+            cardId.copyInto(mCardBuffer, 6)
+        return mCardBuffer
     }
 
     private fun constructCardPacket(): DatagramPacket {
         val buf = constructCardData()
-        return DatagramPacket(buf, buf[0] + 1)
+        return DatagramPacket(buf, buf[0].toInt() + 1)
     }
 
     private val airUpdateInterval = 10L
@@ -1045,17 +1079,25 @@ class MainActivity : AppCompatActivity() {
     private var mLastAirUpdateTime = 0L
     private fun applyKeys(event: InputEvent, buffer: IoBuffer): IoBuffer {
         return buffer.apply {
+            // Clear reusable arrays first
+            slider.fill(0)
+            air.fill(0)
+
             if (mEnableAir) {
                 buffer.length = 47
-                buffer.header = byteArrayOf('I'.byte(), 'N'.byte(), 'P'.byte())
+                buffer.header[0] = 'I'.byte()
+                buffer.header[1] = 'N'.byte()
+                buffer.header[2] = 'P'.byte()
             } else {
                 buffer.length = 41
-                buffer.header = byteArrayOf('I'.byte(), 'P'.byte(), 'T'.byte())
+                buffer.header[0] = 'I'.byte()
+                buffer.header[1] = 'P'.byte()
+                buffer.header[2] = 'T'.byte()
             }
 
-            if (event.keys != null && event.keys.isNotEmpty()) {
+            if (event.keys != 0L) {
                 for (i in 0 until 32) {
-                    buffer.slider[31 - i] = if (event.keys.contains(i)) 0x80.toByte() else 0x0
+                    buffer.slider[31 - i] = if (event.keys and (1L shl i) != 0L) 0x80.toByte() else 0x0
                 }
             }
 
@@ -1099,12 +1141,12 @@ class MainActivity : AppCompatActivity() {
                 else -> continue
             }
             val right = left + width
-            mLEDCanvas.drawRect(left, 0f, right, drawHeight.toFloat(), color.toPaint())
+            mLEDPaint.color = color.toInt()
+            mLEDCanvas.drawRect(left, 0f, right, drawHeight.toFloat(), mLEDPaint)
             drawXOffset += width
         }
         mButtonRenderer.postInvalidate()
     }
-    private fun Long.toPaint(): Paint = Paint().apply { color = toInt() }
 
     companion object {
         private const val TAG = "Brokenithm"
