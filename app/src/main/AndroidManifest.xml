@@ -19,7 +19,8 @@
         android:theme="@style/Theme.Brokenithm">
         <activity android:name=".activity.MainActivity"
             android:screenOrientation="landscape"
-            android:configChanges="uiMode|orientation">
+            android:configChanges="uiMode|orientation"
+            android:exported="true">
             <meta-data android:name="android.nfc.action.TECH_DISCOVERED" android:resource="@xml/nfc_tech_filters" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
